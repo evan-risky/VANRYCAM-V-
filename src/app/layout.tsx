@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Playfair_Display } from "next/font/google";
+import { Geist, Great_Vibes, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { SessionProvider } from "@/components/session-provider";
 
@@ -11,6 +11,12 @@ const geistSans = Geist({
 const playfair = Playfair_Display({
   variable: "--font-serif",
   subsets: ["latin"],
+});
+
+const greatVibes = Great_Vibes({
+  variable: "--font-great-vibes",
+  subsets: ["latin"],
+  weight: ["400"],
 });
 
 export const metadata: Metadata = {
@@ -35,7 +41,7 @@ export default function RootLayout({
   return (
     <html
       lang="id"
-      className={`${geistSans.variable} ${playfair.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${playfair.variable} ${greatVibes.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <SessionProvider>{children}</SessionProvider>

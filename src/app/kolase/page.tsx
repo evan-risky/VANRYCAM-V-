@@ -131,9 +131,8 @@ export default function KolasePage() {
       const composedSignature = photos.map((photo) => photo.id).join("|");
       const blob = await composeCollage({
         blobs: photos.map((photo) => photo.blob),
-        couple: event?.couple,
-        guest: session?.name,
-        dateLabel: event?.dateLabel,
+        title: event?.couple,
+        subtitle: event?.dateLabel,
       });
       const url = URL.createObjectURL(blob);
       setResult((current) => {
@@ -350,10 +349,8 @@ export default function KolasePage() {
               <p className="text-sm font-medium">Pratinjau kolase</p>
               <CollagePoster
                 photos={photoUrls}
-                couple={event?.couple}
-                guest={session?.name}
-                dateLabel={event?.dateLabel}
-                className="rounded-xl border border-border"
+                title={event?.couple}
+                subtitle={event?.dateLabel}
               />
             </div>
           ) : (
@@ -387,7 +384,7 @@ export default function KolasePage() {
               )}
 
               <p className="text-xs text-muted-foreground">
-                Tata letak {grid.columns} x {grid.rows}. Kolase dibuat dari foto
+                Tata letak {grid.cols} x {grid.rows}. Kolase dibuat dari foto
                 yang tersimpan di perangkat; hanya kolase yang diunggah ke Google
                 Drive, bukan foto terpisah.
               </p>

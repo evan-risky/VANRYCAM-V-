@@ -59,8 +59,12 @@ diunggah; hanya kolase (satu per sesi). Tidak ada reveal/`/menunggu`.
   di `src/lib/prisma.ts`. Import client dari `@/generated/prisma/client` (di-*gitignore* di `src/generated`).
 - **shadcn = Base UI.** `Button` pakai prop `render={<Link/>}` + `nativeButton={false}`, bukan `asChild`.
 - **Cache Components.** Dilarang `export const runtime = "nodejs"` di route handler. Untuk layout/route
-  authed yang pakai `cookies()`, set `export const instant = false` (lihat `src/app/admin/(panel)/layout.tsx`).
-- **Prerender.** `next build` memblokir `new Date()`/`Date.now()` saat render. Hitung waktu di effect/handler.
+  authed yang pakai `cookies()`, set `export const instant = false` (lihat `src/app/admin/(panel)/layout.tsx`)
+  dan panggil `await connection()` dari `next/server` di awal Server Component.
+- **Prerender & unstable values.** `next build`/prerender memblokir `Date.now()`, `new Date()`,
+  `Math.random()`, dan `crypto.randomUUID()` di jalur prerender. Panggil `await connection()` lebih dulu
+  (dynamic access) atau hitung waktu di effect/handler. `decodeAdminToken` di `src/lib/admin-auth.ts`
+  hanya boleh dipanggil setelah `connection()`/dynamic access.
 - **Cookie.** Tamu: `vanry_guest` = opaque token (HttpOnly/Lax), DB simpan `sha256(token)`.
   Admin: `vanry_admin` = payload+HMAC (`SESSION_SECRET`). Ambil token via `next/headers cookies()`.
 

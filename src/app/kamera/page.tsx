@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ArrowLeft,
   Camera,
   CameraOff,
   Check,
@@ -23,6 +24,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -62,7 +64,7 @@ function LocalThumb({ blob }: { blob: Blob }) {
 
 export default function KameraPage() {
   const router = useRouter();
-  const { ready, session } = useSession();
+  const { ready, session, resetSession } = useSession();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -76,6 +78,9 @@ export default function KameraPage() {
   const [loaded, setLoaded] = useState(false);
   const [secure, setSecure] = useState<boolean | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
 
   const quota = session?.quota ?? 0;
   const taken = photos.length;
@@ -132,12 +137,6 @@ export default function KameraPage() {
   }, []);
 
   useEffect(() => {
-    if (ready && !session) {
-      router.replace("/mulai");
-    }
-  }, [ready, session, router]);
-
-  useEffect(() => {
     setSecure(window.isSecureContext);
   }, []);
 
@@ -147,18 +146,23 @@ export default function KameraPage() {
   }, [session, loadLocal]);
 
   useEffect(() => {
+    if (!session) {
+      stopStream();
+      return;
+    }
     void startStream(facing);
     return () => stopStream();
-  }, [facing, startStream, stopStream]);
+  }, [session, facing, startStream, stopStream]);
 
   useEffect(() => {
+    if (!session) return;
     const onVisibility = () => {
       if (document.hidden) stopStream();
       else void startStream(facing);
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [facing, startStream, stopStream]);
+  }, [session, facing, startStream, stopStream]);
 
   async function shoot() {
     if (captureBusy) return;
@@ -212,9 +216,88 @@ export default function KameraPage() {
     await loadLocal();
   }
 
-  if (!ready || !session || !loaded) {
+  async function performReset() {
+    if (resetting) return;
+    setResetting(true);
+    setResetError(null);
+    try {
+      await clearPhotos();
+      setPhotos([]);
+      const result = await resetSession();
+      if (!result.ok) {
+        setResetError(
+          result.message
+            ? `${result.message} Periksa koneksi dan coba lagi.`
+            : "Gagal reset. Periksa koneksi dan coba lagi.",
+        );
+        return;
+      }
+      setResetOpen(false);
+      router.push("/mulai?reset=1");
+    } catch (error) {
+      setResetError(
+        error instanceof Error
+          ? `${error.message} Periksa koneksi dan coba lagi.`
+          : "Gagal reset. Periksa koneksi dan coba lagi.",
+      );
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const resetDialog = (
+    <ResetQuotaDialog
+      open={resetOpen}
+      onOpenChange={setResetOpen}
+      hasSession={Boolean(session)}
+      resetting={resetting}
+      error={resetError}
+      onConfirm={() => void performReset()}
+    />
+  );
+
+  if (!ready) {
     return (
       <FlowLayout step={3} title="Kamera" description="Menyiapkan sesi tamu…">
+        <Card>
+          <CardContent className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+            <RefreshCw className="size-4 animate-spin" />
+            Memuat kamera
+          </CardContent>
+        </Card>
+      </FlowLayout>
+    );
+  }
+
+  if (!session) {
+    return (
+      <FlowLayout
+        step={3}
+        backHref="/mulai"
+        title="Kamera"
+        description="Sesi tamu belum aktif."
+      >
+        <CameraActions
+          onBack={() => router.push("/mulai")}
+          onReset={() => { setResetError(null); setResetOpen(true); }}
+          resetting={resetting}
+          resetDisabled={false}
+        />
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-8 text-center text-sm text-muted-foreground">
+            <Camera className="size-6" />
+            <p>Sesi tidak ditemukan. Pilih kuota untuk mulai memotret.</p>
+            <Button onClick={() => router.push("/mulai")}>Pilih kuota</Button>
+          </CardContent>
+        </Card>
+        {resetDialog}
+      </FlowLayout>
+    );
+  }
+
+  if (!loaded) {
+    return (
+      <FlowLayout step={3} title="Kamera" description="Memuat foto…">
         <Card>
           <CardContent className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <RefreshCw className="size-4 animate-spin" />
@@ -339,6 +422,13 @@ export default function KameraPage() {
         </div>
       }
     >
+      <CameraActions
+        onBack={() => router.push("/mulai")}
+        onReset={() => { setResetError(null); setResetOpen(true); }}
+        resetting={resetting}
+        resetDisabled={captureBusy}
+      />
+
       <div className="relative overflow-hidden rounded-2xl border border-border bg-primary">
         <video
           ref={videoRef}
@@ -467,7 +557,121 @@ export default function KameraPage() {
           foto ini dan hanya kolase yang diunggah ke Google Drive.
         </CardContent>
       </Card>
+
+      {resetDialog}
     </FlowLayout>
+  );
+}
+
+function CameraActions({
+  onBack,
+  onReset,
+  resetting,
+  resetDisabled,
+}: {
+  onBack: () => void;
+  onReset: () => void;
+  resetting: boolean;
+  resetDisabled: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="min-h-10 px-3"
+        aria-label="Kembali ke pilih kuota"
+        onClick={onBack}
+        disabled={resetting}
+      >
+        <ArrowLeft className="size-4" />
+        Kembali
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="min-h-10 px-3 text-destructive"
+        aria-label="Reset kuota foto"
+        onClick={onReset}
+        disabled={resetting || resetDisabled}
+      >
+        {resetting ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <RotateCcw className="size-4" />
+        )}
+        {resetting ? "Mereset…" : "Reset"}
+      </Button>
+    </div>
+  );
+}
+
+function ResetQuotaDialog({
+  open,
+  onOpenChange,
+  hasSession,
+  resetting,
+  error,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  hasSession: boolean;
+  resetting: boolean;
+  error: string | null;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (resetting) return;
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent showCloseButton={!resetting}>
+        <DialogHeader>
+          <DialogTitle>Reset kuota foto?</DialogTitle>
+          <DialogDescription>
+            {hasSession
+              ? "Semua foto yang sudah diambil akan dihapus dan kamu akan memilih kuota baru. Tindakan ini tidak bisa dibatalkan."
+              : "Kembali ke awal? Data lokal akan dibersihkan dan kamu akan memilih kuota baru."}
+          </DialogDescription>
+        </DialogHeader>
+        {error ? (
+          <Alert variant="destructive">
+            <CircleAlert />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={resetting}
+            autoFocus
+          >
+            Batal
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={resetting}
+          >
+            {resetting ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Mereset…
+              </>
+            ) : error ? (
+              "Coba lagi"
+            ) : (
+              "Ya, Reset"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

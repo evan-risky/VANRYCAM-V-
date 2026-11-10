@@ -11,22 +11,38 @@ type CollageFile = {
   driveFileName: string | null;
 };
 
+type DriveStream = {
+  body: ReadableStream<Uint8Array>;
+  contentType: string;
+};
+
+const GALLERY_FILE_ID_PATTERN = /^[A-Za-z0-9_-]{10,}$/;
+
+export function isValidGalleryFileId(value: string): boolean {
+  return GALLERY_FILE_ID_PATTERN.test(value);
+}
+
+function driveIdCandidates(fileId: string): string[] {
+  const id = encodeURIComponent(fileId);
+  return [
+    `https://drive.google.com/thumbnail?id=${id}&sz=w2000`,
+    `https://lh3.googleusercontent.com/d/${id}`,
+    `https://drive.google.com/uc?export=download&id=${id}`,
+  ];
+}
+
 function driveCandidates(collage: CollageFile): string[] {
-  const urls: string[] = [];
-  if (collage.driveFileId) {
-    const id = encodeURIComponent(collage.driveFileId);
-    urls.push(`https://drive.google.com/thumbnail?id=${id}&sz=w2000`);
-    urls.push(`https://lh3.googleusercontent.com/d/${id}`);
-    urls.push(`https://drive.google.com/uc?export=download&id=${id}`);
-  }
+  const urls = collage.driveFileId
+    ? driveIdCandidates(collage.driveFileId)
+    : [];
   if (collage.driveFileUrl) urls.push(collage.driveFileUrl);
   return urls;
 }
 
-async function loadDriveImage(
-  collage: CollageFile,
-): Promise<{ body: ReadableStream<Uint8Array>; contentType: string } | null> {
-  for (const url of driveCandidates(collage)) {
+async function loadDriveStream(
+  candidates: string[],
+): Promise<DriveStream | null> {
+  for (const url of candidates) {
     try {
       const response = await fetch(url, {
         redirect: "follow",
@@ -41,6 +57,24 @@ async function loadDriveImage(
     }
   }
   return null;
+}
+
+function buildStreamResponse(
+  file: DriveStream,
+  disposition: "inline" | "attachment",
+  fileName: string,
+  mimeType?: string | null,
+): NextResponse {
+  const headers = new Headers();
+  headers.set("Content-Type", mimeType ?? file.contentType);
+  headers.set("Cache-Control", "private, no-store");
+  headers.set(
+    "Content-Disposition",
+    disposition === "inline"
+      ? "inline"
+      : `attachment; filename="${fileName}"`,
+  );
+  return new NextResponse(file.body, { status: 200, headers });
 }
 
 export async function buildCollageResponse(
@@ -78,7 +112,7 @@ export async function buildCollageResponse(
     );
   }
 
-  const file = await loadDriveImage(collage);
+  const file = await loadDriveStream(driveCandidates(collage));
   if (!file) {
     return NextResponse.json(
       { error: "storage_unavailable", message: "Kolase tidak dapat diambil." },
@@ -86,15 +120,37 @@ export async function buildCollageResponse(
     );
   }
 
-  const headers = new Headers();
-  headers.set("Content-Type", collage.mimeType ?? file.contentType);
-  headers.set("Cache-Control", "private, no-store");
-  headers.set(
-    "Content-Disposition",
-    disposition === "inline"
-      ? "inline"
-      : `attachment; filename="${collage.driveFileName ?? `vanry-cam-kolase-${collage.id}.jpg`}"`,
+  return buildStreamResponse(
+    file,
+    disposition,
+    collage.driveFileName ?? `vanry-cam-kolase-${collage.id}.jpg`,
+    collage.mimeType,
   );
+}
 
-  return new NextResponse(file.body, { status: 200, headers });
+export async function buildGalleryResponse(
+  fileId: string,
+  disposition: "inline" | "attachment",
+): Promise<Response> {
+  if (!isValidGalleryFileId(fileId)) {
+    return NextResponse.json(
+      { error: "not_found", message: "Gambar tidak ditemukan." },
+      { status: 404 },
+    );
+  }
+
+  const file = await loadDriveStream(driveIdCandidates(fileId));
+  if (!file) {
+    return NextResponse.json(
+      { error: "not_found", message: "Gambar tidak ditemukan." },
+      { status: 404 },
+    );
+  }
+
+  return buildStreamResponse(
+    file,
+    disposition,
+    `vanry-cam-${fileId}.jpg`,
+    file.contentType,
+  );
 }

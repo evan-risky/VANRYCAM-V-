@@ -4,23 +4,22 @@ import { COLLAGE_MIME_TYPE, MAX_COLLAGE_BYTES } from "@/lib/config";
 import {
   collageGridLayout,
   POSTER_COLORS,
+  POSTER_TEXT_DEFAULTS,
   POSTER_TYPOGRAPHY,
+  SVG_FLOWERS,
 } from "@/lib/collage-style";
 
 export { collageGrid } from "@/lib/collage-style";
 
 export type CollageComposeInput = {
   blobs: Blob[];
-  couple?: string;
-  guest?: string;
-  dateLabel?: string;
+  title?: string;
+  subtitle?: string;
 };
 
 const FRAME_WIDTH = 1080;
-const MARGIN = 48;
-const GAP = 16;
-const HEADER_HEIGHT = 190;
-const FOOTER_HEIGHT = 160;
+const DESIGN_WIDTH = 1000;
+const SCALE = FRAME_WIDTH / DESIGN_WIDTH;
 
 function loadImage(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -33,6 +32,23 @@ function loadImage(blob: Blob): Promise<HTMLImageElement> {
     image.onerror = () => {
       URL.revokeObjectURL(url);
       reject(new Error("Gagal memuat foto"));
+    };
+    image.src = url;
+  });
+}
+
+function loadSvgImage(svg: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([svg], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Gagal memuat dekorasi"));
     };
     image.src = url;
   });
@@ -51,6 +67,24 @@ function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   });
 }
 
+function roundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.arcTo(x + width, y, x + width, y + height, r);
+  context.arcTo(x + width, y + height, x, y + height, r);
+  context.arcTo(x, y + height, x, y, r);
+  context.arcTo(x, y, x + width, y, r);
+  context.closePath();
+}
+
 function drawCover(
   context: CanvasRenderingContext2D,
   image: HTMLImageElement,
@@ -67,110 +101,247 @@ function drawCover(
   context.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
 }
 
-function drawStamp(
+function resolveFamily(cssVariable: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(cssVariable)
+    .trim();
+  return value || fallback;
+}
+
+async function ensureFonts(titleFamily: string, bodyFamily: string) {
+  if (typeof document === "undefined" || !document.fonts) return;
+  try {
+    await document.fonts.ready;
+    await Promise.all([
+      document.fonts.load(`76px ${titleFamily}`),
+      document.fonts.load(`12px ${bodyFamily}`),
+    ]);
+  } catch {
+    return;
+  }
+}
+
+function drawSpacedText(
   context: CanvasRenderingContext2D,
+  text: string,
   centerX: number,
-  centerY: number,
+  y: number,
+  spacing: number,
 ) {
-  const radius = 62;
-  context.save();
-  context.translate(centerX, centerY);
-  context.rotate((-12 * Math.PI) / 180);
-  context.beginPath();
-  context.arc(0, 0, radius, 0, Math.PI * 2);
-  context.strokeStyle = POSTER_COLORS.accent;
-  context.lineWidth = 2;
-  context.stroke();
-  context.fillStyle = POSTER_COLORS.accent;
-  context.font = `600 20px ${POSTER_TYPOGRAPHY.meta}`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText("VANRY", 0, -8);
-  context.fillText("CAM", 0, 16);
-  context.restore();
+  const characters = Array.from(text);
+  if (characters.length === 0) return;
+  const widths = characters.map((char) => context.measureText(char).width);
+  const total =
+    widths.reduce((sum, width) => sum + width, 0) +
+    spacing * Math.max(0, characters.length - 1);
+  let x = centerX - total / 2;
+  const previousAlign = context.textAlign;
+  context.textAlign = "left";
+  characters.forEach((char, index) => {
+    context.fillText(char, x, y);
+    x += widths[index] + spacing;
+  });
+  context.textAlign = previousAlign;
 }
 
 export async function composeCollage(
   input: CollageComposeInput,
 ): Promise<Blob> {
+  const layout = collageGridLayout(input.blobs.length);
   const images = await Promise.all(input.blobs.map(loadImage));
-  const { columns, rows } = collageGridLayout(images.length);
+  const [flowerTop, flowerSide, flowerBottom] = await Promise.all([
+    loadSvgImage(SVG_FLOWERS.top),
+    loadSvgImage(SVG_FLOWERS.side),
+    loadSvgImage(SVG_FLOWERS.bottom),
+  ]);
 
-  const tileSize =
-    (FRAME_WIDTH - MARGIN * 2 - GAP * (columns - 1)) / columns;
-  const gridHeight = rows * tileSize + GAP * (rows - 1);
-  const frameHeight = MARGIN * 2 + HEADER_HEIGHT + gridHeight + FOOTER_HEIGHT;
+  const titleFamily = resolveFamily(
+    "--font-great-vibes",
+    `"${POSTER_TYPOGRAPHY.title.family}", ${POSTER_TYPOGRAPHY.title.fallback}`,
+  );
+  const bodyFamily = resolveFamily(
+    "--font-serif",
+    `"${POSTER_TYPOGRAPHY.subtitle.family}", ${POSTER_TYPOGRAPHY.subtitle.fallback}`,
+  );
+  await ensureFonts(titleFamily, bodyFamily);
+
+  const padTop = layout.padding.top * SCALE;
+  const padX = layout.padding.left * SCALE;
+  const padBottom = layout.padding.bottom * SCALE;
+  const gapX = layout.gapX * SCALE;
+  const gapY = layout.gapY * SCALE;
+  const contentWidth = FRAME_WIDTH - padX * 2;
+  const cardWidth =
+    (contentWidth - gapX * (layout.cols - 1)) / layout.cols;
+  const cardHeight = cardWidth / layout.aspect;
+  const gridHeight =
+    layout.rows * cardHeight + gapY * (layout.rows - 1);
+
+  const titleSize = layout.titleSize * SCALE;
+  const subtitleSize = POSTER_TYPOGRAPHY.subtitle.size * SCALE;
+  const subtitleSpacing = POSTER_TYPOGRAPHY.subtitle.letterSpacing * SCALE;
+  const subtitleMargin = 12 * SCALE;
+  const headerTextHeight =
+    titleSize * POSTER_TYPOGRAPHY.title.lineHeight +
+    subtitleMargin +
+    subtitleSize;
+  const headerHeight = Math.max(
+    layout.headerMinHeight * SCALE,
+    headerTextHeight,
+  );
+  const headerMargin = layout.headerMarginBottom * SCALE;
+  const gridTop = padTop + headerHeight + headerMargin;
+  const neededHeight = gridTop + gridHeight + padBottom;
+  const canvasHeight = Math.round(
+    Math.max(layout.minHeight * SCALE, neededHeight),
+  );
 
   const canvas = document.createElement("canvas");
   canvas.width = FRAME_WIDTH;
-  canvas.height = Math.round(frameHeight);
+  canvas.height = canvasHeight;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas tidak tersedia");
 
   context.fillStyle = POSTER_COLORS.paper;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
-  context.textAlign = "left";
-  context.textBaseline = "alphabetic";
-
-  context.fillStyle = POSTER_COLORS.accent;
-  context.font = `500 20px ${POSTER_TYPOGRAPHY.meta}`;
-  context.fillText("VANRY CAM", MARGIN, MARGIN + 20);
-
-  context.fillStyle = POSTER_COLORS.ink;
-  context.font = `600 58px ${POSTER_TYPOGRAPHY.heading}`;
-  context.fillText(input.couple ?? "Evan & Inri", MARGIN, MARGIN + 90);
-
-  context.strokeStyle = POSTER_COLORS.line;
-  context.lineWidth = 1;
-  context.beginPath();
-  context.moveTo(MARGIN, MARGIN + 118);
-  context.lineTo(FRAME_WIDTH - MARGIN, MARGIN + 118);
-  context.stroke();
-
-  context.fillStyle = POSTER_COLORS.ink;
-  context.font = `italic 26px ${POSTER_TYPOGRAPHY.heading}`;
-  const caption = input.guest
-    ? `Catatan dari ${input.guest}${input.dateLabel ? ` · ${input.dateLabel}` : ""}`
-    : "Catatan kecil dari tamu";
-  context.fillText(caption, MARGIN, MARGIN + 158);
-
-  const gridTop = MARGIN + HEADER_HEIGHT;
   images.forEach((image, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const x = MARGIN + column * (tileSize + GAP);
-    const y = gridTop + row * (tileSize + GAP);
+    const column = index % layout.cols;
+    const row = Math.floor(index / layout.cols);
+    const cardX = padX + column * (cardWidth + gapX);
+    const cardY = gridTop + row * (cardHeight + gapY);
+    const childNumber = index + 1;
+    const rotation =
+      childNumber % 3 === 2 ? 0.6 : childNumber % 3 === 0 ? -0.5 : 0;
+    const centerX = cardX + cardWidth / 2;
+    const centerY = cardY + cardHeight / 2;
+
+    context.save();
+    context.translate(centerX, centerY);
+    context.rotate((rotation * Math.PI) / 180);
+    context.translate(-centerX, -centerY);
+
+    context.shadowColor = "rgba(73, 59, 52, 0.157)";
+    context.shadowBlur = 12 * SCALE;
+    context.shadowOffsetX = 6 * SCALE;
+    context.shadowOffsetY = 8 * SCALE;
+    context.fillStyle = POSTER_COLORS.frame;
+    roundedRect(context, cardX, cardY, cardWidth, cardHeight, 3 * SCALE);
+    context.fill();
+
+    context.shadowColor = "transparent";
+    context.shadowBlur = 0;
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
+
+    const cardPaddingX = layout.polaroidPadding.x * SCALE;
+    const cardPaddingTop = layout.polaroidPadding.top * SCALE;
+    const cardPaddingBottom =
+      layout.polaroidPadding.bottom !== undefined
+        ? layout.polaroidPadding.bottom * SCALE
+        : (layout.polaroidPadding.bottomRatio ?? 0) * cardWidth;
+    const imageX = cardX + cardPaddingX;
+    const imageY = cardY + cardPaddingTop;
+    const imageWidth = cardWidth - cardPaddingX * 2;
+    const imageHeight = cardHeight - cardPaddingTop - cardPaddingBottom;
+
     context.save();
     context.beginPath();
-    context.rect(x, y, tileSize, tileSize);
+    context.rect(imageX, imageY, imageWidth, imageHeight);
     context.clip();
-    context.fillStyle = POSTER_COLORS.white;
-    context.fillRect(x, y, tileSize, tileSize);
-    drawCover(context, image, x, y, tileSize, tileSize);
+    const placeholder = context.createLinearGradient(
+      imageX,
+      imageY,
+      imageX + imageWidth,
+      imageY + imageHeight,
+    );
+    placeholder.addColorStop(0, POSTER_COLORS.placeholderStart);
+    placeholder.addColorStop(1, POSTER_COLORS.placeholderEnd);
+    context.fillStyle = placeholder;
+    context.fillRect(imageX, imageY, imageWidth, imageHeight);
+    drawCover(context, image, imageX, imageY, imageWidth, imageHeight);
     context.restore();
-    context.strokeStyle = POSTER_COLORS.line;
-    context.lineWidth = 1;
-    context.strokeRect(x + 0.5, y + 0.5, tileSize - 1, tileSize - 1);
+
+    const numberSize = layout.numberSize * SCALE;
+    const numberSpacing = POSTER_TYPOGRAPHY.number.letterSpacing * SCALE;
+    context.fillStyle = POSTER_COLORS.number;
+    context.font = `${numberSize}px ${bodyFamily}`;
+    context.textBaseline = "middle";
+    drawSpacedText(
+      context,
+      String(index + 1).padStart(2, "0"),
+      centerX,
+      cardY + cardHeight - layout.numberBottom * SCALE - numberSize / 2,
+      numberSpacing,
+    );
+
+    context.restore();
   });
 
-  const footerTop = gridTop + gridHeight + 40;
-  context.strokeStyle = POSTER_COLORS.accent;
-  context.lineWidth = 2;
-  context.beginPath();
-  context.moveTo(MARGIN, footerTop);
-  context.lineTo(MARGIN + 70, footerTop);
-  context.stroke();
+  const headerCenterY = padTop + headerHeight / 2;
+  const titleY = headerCenterY - (subtitleSize + subtitleMargin) / 2;
 
-  context.fillStyle = POSTER_COLORS.ink;
-  context.font = `400 34px ${POSTER_TYPOGRAPHY.heading}`;
-  context.fillText("Evan + Inri", MARGIN, footerTop + 46);
+  context.fillStyle = POSTER_COLORS.titleInk;
+  context.font = `${titleSize}px ${titleFamily}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(
+    input.title ?? "",
+    FRAME_WIDTH / 2,
+    titleY,
+    contentWidth * 0.75,
+  );
 
-  context.fillStyle = POSTER_COLORS.accent;
-  context.font = `500 18px ${POSTER_TYPOGRAPHY.meta}`;
-  context.fillText("Muara Teweh · 2026", MARGIN, footerTop + 78);
+  context.fillStyle = POSTER_COLORS.subtitle;
+  context.font = `${subtitleSize}px ${bodyFamily}`;
+  context.textBaseline = "middle";
+  drawSpacedText(
+    context,
+    (input.subtitle ?? "").toUpperCase(),
+    FRAME_WIDTH / 2,
+    titleY +
+      (titleSize * POSTER_TYPOGRAPHY.title.lineHeight) / 2 +
+      subtitleMargin +
+      subtitleSize / 2,
+    subtitleSpacing,
+  );
 
-  drawStamp(context, FRAME_WIDTH - MARGIN - 70, footerTop + 40);
+  const topWidth = FRAME_WIDTH * 0.16;
+  context.drawImage(flowerTop, -FRAME_WIDTH * 0.01, 0, topWidth, topWidth);
+
+  const sideWidth = FRAME_WIDTH * 0.14;
+  const sideHeight = sideWidth * (300 / 180);
+  context.drawImage(
+    flowerSide,
+    FRAME_WIDTH - FRAME_WIDTH * 0.11,
+    canvasHeight * 0.42,
+    sideWidth,
+    sideHeight,
+  );
+
+  const bottomWidth = FRAME_WIDTH * 0.34;
+  const bottomHeight = bottomWidth * (230 / 340);
+  context.drawImage(
+    flowerBottom,
+    FRAME_WIDTH * 0.32,
+    canvasHeight + canvasHeight * 0.02 - bottomHeight,
+    bottomWidth,
+    bottomHeight,
+  );
+
+  const footerSize = POSTER_TYPOGRAPHY.footer.size * SCALE;
+  const footerSpacing = POSTER_TYPOGRAPHY.footer.letterSpacing * SCALE;
+  context.fillStyle = POSTER_COLORS.footer;
+  context.font = `${footerSize}px ${bodyFamily}`;
+  context.textBaseline = "middle";
+  drawSpacedText(
+    context,
+    POSTER_TEXT_DEFAULTS.footerNote,
+    FRAME_WIDTH / 2,
+    canvasHeight - (15 + POSTER_TYPOGRAPHY.footer.size / 2) * SCALE,
+    footerSpacing,
+  );
 
   let blob = await toJpeg(canvas, 0.92);
   for (

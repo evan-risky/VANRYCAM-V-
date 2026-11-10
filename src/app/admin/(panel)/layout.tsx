@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { LogoutButton } from "@/components/admin/logout-button";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { Brand } from "@/components/brand";
@@ -15,6 +16,7 @@ export default async function AdminPanelLayout({
 }: {
   children: React.ReactNode;
 }) {
+  await connection();
   const user = await getAdminUserFromCookies();
   if (!user) {
     redirect("/admin/login");

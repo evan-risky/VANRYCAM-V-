@@ -32,6 +32,8 @@ sebagai Web App yang dapat diakses siapa saja). Panggilan GAS memakai header
 | `SESSION_SECRET` | string acak panjang (≥32 byte) | Production/Preview |
 | `NEXT_PUBLIC_APP_URL` | `https://domain-acara` | Production |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | hanya untuk seeding awal | jaga tetap lokal |
+| `ADMIN_NAME` | nama admin untuk seed (opsional, default `Penyelenggara`) | lokal |
+| `ALLOWED_DEV_ORIGINS` | origin dev yang diizinkan (opsional, default `192.168.101.127,localhost,127.0.0.1`) | Development |
 
 Catatan: jangan pernah menaruh secret di `NEXT_PUBLIC_*`.
 
@@ -88,3 +90,68 @@ ganti ke store bersama (Upstash Redis/Vercel KV) tanpa mengubah tanda tangan fun
 
 Lihat checklist Android/iOS pada laporan Tahap 3. Wajib uji di perangkat fisik: izin kamera,
 kualitas foto, upload jaringan lambat, dan safe area notch.
+
+## 9. Development lokal (WSL)
+
+- `.env.local` **wajib ada** di root project. Salin dari `.env.example`
+  (`cp .env.example .env.local`), lalu isi nilai asli. Jangan commit file ini (sudah di-`.gitignore`).
+- `next dev` / `next build` memuat `.env.local` otomatis. `prisma7.config.ts` juga memuatnya untuk
+  Prisma CLI (`db:migrate`, `db:deploy`, `db:seed`).
+- Script standalone dengan `tsx`/`node` **tidak** otomatis membaca `.env.local`; `import "dotenv/config"`
+  hanya membaca `.env`. Pilih salah satu:
+  - biarkan `src/lib/prisma.ts` memuat `.env.local` otomatis saat berjalan di luar Next.js (perilaku saat
+    ini, memakai `process.loadEnvFile` bawaan Node), atau
+  - jalankan `npx tsx --env-file=.env.local -e "..."`, atau
+  - gunakan `npx dotenv -e .env.local -- npx tsx ...` (butuh `dotenv-cli`).
+- Nama delegate Prisma mengikuti nama model, bukan nama tabel: gunakan `prisma.event`,
+  `prisma.guestSession`, `prisma.collage` (bukan `prisma.events` / `prisma.guest_sessions`).
+- Jangan menjalankan `prisma migrate dev`, `prisma db push`, atau `prisma migrate reset` terhadap DB
+  produksi. Untuk menerapkan migrasi gunakan `npm run db:deploy`.
+
+## 10. Setup Galeri (GAS)
+
+Galeri `/galeri` mengambil daftar file dari Google Drive melalui GAS (`action=listGallery`), lalu
+memproksikan pratinjau/unduhan lewat server. Deployment GAS **manual** dan tidak dilakukan aplikasi.
+
+Catatan: repo ini menyediakan `docs/gas-gallery.gs` (tidak ada `docs/gas-gallery-full.gs`). Jika GAS
+produksi sudah punya handler upload, **gabungkan** cabang `action=listGallery` + helper-nya ke `doGet`
+yang ada; jangan menimpa seluruh `Code.gs`.
+
+1. Backup dulu: buka project Apps Script → **File → Make a copy**.
+2. Salin isi `docs/gas-gallery.gs` ke `Code.gs` (atau gabungkan cabang `action=listGallery`).
+3. Pastikan `GALLERY_DRIVE_FOLDER_ID` di GAS sama dengan `GALLERY_DRIVE_FOLDER_ID` di
+   `src/lib/config.ts` (`1MABCea1U99q63pVkN1WKb00DuJkGQirR`).
+4. Opsional, tambahkan health check di `doGet`:
+   ```js
+   if (action === "ping") return jsonOutput_({ ok: true, message: "pong" });
+   ```
+5. Test dari Editor dengan fungsi sementara:
+   ```js
+   function testListGallery() {
+     Logger.log(JSON.stringify(listGallery_()));
+   }
+   ```
+   Jalankan dan pastikan hasilnya `{ ok: true, files: [...] }`.
+6. **Deploy → Manage deployments → Edit → New version → Deploy**.
+   - **Who has access: Anyone** (bukan “Anyone with Google account”).
+7. Copy URL yang berakhiran `/exec`.
+8. Set `GAS_WEB_APP_URL` ke URL `/exec` tersebut di `.env.local` (lokal) dan Environment Variables
+   Vercel (production). Jangan memakai placeholder `DEPLOYMENT_ID`.
+9. Restart `npm run dev`, lalu verifikasi:
+
+   ```bash
+   curl "$GAS_WEB_APP_URL?action=ping"
+   curl "$GAS_WEB_APP_URL?action=listGallery"
+   curl http://localhost:3000/api/gallery
+   ```
+
+   Harapan: `{"ok":true,...}`, `{"ok":true,"files":[...]}`, dan `{"files":[...]}` (HTTP 200).
+
+### Troubleshooting galeri
+
+| Status / Error | Penyebab | Fix |
+|---|---|---|
+| 503 `gas_not_configured` | `GAS_WEB_APP_URL` kosong / masih placeholder | Isi dengan URL `/exec` hasil deploy |
+| 502 `gas_invalid_response` | GAS belum di-deploy dengan `listGallery` / access bukan Anyone | Deploy ulang, set access Anyone |
+| 502 `gas_error` | `FOLDER_ID` salah / akses Drive ditolak | Cek `GALLERY_DRIVE_FOLDER_ID` dan izin folder |
+| 200 tapi `files: []` | Folder kosong | Unggah kolase dulu |

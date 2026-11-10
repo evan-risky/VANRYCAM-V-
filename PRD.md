@@ -13,7 +13,7 @@ Vanry Cam adalah web kamera disposable untuk pernikahan Evan & Inri. Tamu membuk
 - Kolase disimpan di **Google Drive melalui Google Apps Script (GAS)**, bukan di MySQL sebagai biner.
 - Jangan menyimpan kolase sebagai base64 atau biner di MySQL; MySQL hanya menyimpan metadata + `drive_file_url`.
 - Jangan mengirim blob mentah selain melalui endpoint server yang memvalidasi sesi dan ownership.
-- Download kolase hanya melalui endpoint server yang memvalidasi sesi, event, dan ownership.
+- Download gambar galeri hanya melalui endpoint proxy server; jangan beri link/folder Drive langsung ke tamu.
 - Jangan menaruh password database, `SESSION_SECRET`, kredensial database, atau secret lain dalam kode, Git, `AGENTS.md`, atau variable `NEXT_PUBLIC_*`.
 - Jangan mengarang file, API, dependency, atau hasil test yang belum benar-benar ada/dijalankan.
 - Jangan menggabungkan Tahap 1 dan Tahap 2 dalam satu respons.
@@ -100,14 +100,14 @@ Unggah kolase melalui Next.js API → GAS → Google Drive + Google Sheets
         ↓
 Galeri langsung terbuka
         ↓
-Tamu melihat dan mengunduh kolase miliknya
+Tamu melihat galeri bersama dan mengunduh kolase
 ```
 
 **Catatan (revisi kolase → Drive):** tidak ada tahap reveal. Foto disimpan dulu di perangkat
 (IndexedDB) dan **tidak diunggah**. Hanya kolase (satu per sesi) yang dikirim ke server lalu diteruskan
 ke Google Apps Script (`GAS_WEB_APP_URL`) untuk disimpan di Google Drive dan dicatat di Google Sheet.
-Retry memakai `idempotencyKey` yang sama sehingga tidak ada duplikat. Galeri hanya menampilkan kolase
-milik sesi tamu tersebut, bukan milik tamu lain.
+Retry memakai `idempotencyKey` yang sama sehingga tidak ada duplikat. Galeri bersifat bersama: menampilkan
+seluruh kolase acara yang tersimpan di folder Drive, diambil lewat listing GAS dan diproksi server.
 
 ## Model data
 
@@ -161,10 +161,12 @@ Satu sesi tamu memiliki maksimal satu kolase. Kolase dibuat di klien (Canvas) da
   (`fileNameFoto`). Jangan menyimpan biner/base64 kolase di MySQL, dan jangan memberi link Drive
   langsung ke tamu.
 - Retry dengan `idempotencyKey` sama mengembalikan kolase yang sama tanpa duplikat.
-- Galeri menampilkan gambar melalui `GET /api/collage/[id]/image` (proxy server yang memvalidasi
-  sesi/ownership lalu mengambil file dari Drive memakai `drive_file_id`). Unduh kolase lewat
-  `GET /api/collages/[id]/download`. Galeri langsung terbuka setelah kolase berhasil diunggah.
-- Tamu hanya dapat melihat dan mengunduh kolase miliknya.
+- Galeri memuat daftar file gambar dari folder Drive melalui `GET /api/gallery` (server memanggil GAS
+  `action=listGallery`; cache in-memory 20 detik per instance). Pratinjau memakai
+  `GET /api/gallery/[id]/image` dan unduhan `GET /api/gallery/[id]/download`; keduanya proxy server
+  (`Content-Disposition: attachment` untuk unduhan), bukan link Drive langsung.
+- Galeri bersifat bersama (semua kolase acara), bukan hanya kolase milik sesi sendiri. Endpoint kolase
+  per-sesi (`/api/collage/[id]/image`, `/api/collages/[id]/download`) tetap ada untuk kompatibilitas.
 
 ## Environment variables
 
@@ -334,7 +336,8 @@ Tahap 1 selesai apabila:
 > migrasi LONGBLOB.
 >
 > **Revisi produk:** reveal dihapus. Galeri langsung terbuka setelah roll tamu selesai; tidak ada
-> halaman `/menunggu`, tidak ada reveal manual/terjadwal. Galeri hanya menampilkan foto sesi tamu sendiri.
+> halaman `/menunggu`, tidak ada reveal manual/terjadwal. Galeri langsung terbuka dan menampilkan kolase
+> bersama dari folder Drive via proxy server.
 >
 > **Revisi penyimpanan:** foto disimpan di MySQL `photos.file_data` (`LONGBLOB`), bukan Google Drive.
 > Tidak ada `googleapis`, Service Account, `drive_file_id`, atau env Google.
@@ -386,10 +389,13 @@ Tujuan Tahap 2: mengganti data demo menjadi aplikasi yang benar-benar menyimpan 
 ### Galeri (langsung terbuka)
 
 - Tidak ada reveal; galeri terbuka setelah roll tamu selesai.
-- Galeri hanya menampilkan foto milik sesi tamu (filter `session_id` di server).
-- Download foto melalui `GET /api/photos/:id/download`.
-- Server mengambil Buffer dari MySQL lalu mengirimnya sebagai `image/*`.
+- Galeri menampilkan grid masonry seluruh gambar di folder Drive acara (bukan per sesi), diambil lewat
+  `GET /api/gallery` (GAS `action=listGallery`, hanya `image/*`, urut `createdAt` DESC).
+- Pratinjau memakai `GET /api/gallery/[id]/image`; unduhan memakai `GET /api/gallery/[id]/download`
+  (`Content-Disposition: attachment`).
+- Server memproksi file dari Drive; link/folder ID Drive tidak dikirim ke browser.
 - Tidak ada blob, URL eksternal, atau metadata sensitif yang dikirim selain lewat endpoint server.
+- Endpoint foto individual (`GET /api/photos/:id/download`) tetap ada untuk kompatibilitas alur legacy.
 
 ### Admin nyata
 
@@ -433,8 +439,8 @@ Tahap 2 selesai apabila:
 - Tamu dapat memberikan izin kamera dan mengambil foto.
 - Foto tersimpan di MySQL `photos.file_data` (`LONGBLOB`) melalui server.
 - Kuota tidak dapat dilewati dari browser.
-- Galeri hanya menampilkan foto milik sesi tamu.
-- Tamu dapat melihat dan mengunduh foto miliknya.
+- Galeri menampilkan kolase bersama dari folder Drive melalui proxy server (tanpa link Drive langsung).
+- Tamu dapat melihat dan mengunduh gambar galeri melalui `/api/gallery/[id]/image|download`.
 - Tidak ada akses lintas sesi, lintas event, atau lintas organisasi.
 - Seluruh alur diuji pada Android dan iOS perangkat fisik.
 
